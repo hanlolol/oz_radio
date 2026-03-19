@@ -1,0 +1,8 @@
+{
+  "en_speed": 0.5,
+  "ko_speed": 0.7,
+  "pause_short_ms": 800,
+  "pause_long_ms": 1100,
+  "auto_loop": true,
+  "order_type": "KO_EN" 
+}
