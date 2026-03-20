@@ -9,7 +9,7 @@
         android:icon="@mipmap/ic_launcher">
         
         <activity
-            android:name=".MainActivity"
+            android:name="com.ryanheise.audio_service.AudioServiceActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/LaunchTheme"
@@ -26,6 +26,14 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <service android:name="com.ryanheise.audio_service.AudioService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
 
         <meta-data
             android:name="flutterEmbedding"
