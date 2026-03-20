@@ -1,29 +1,13 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:audio_service/audio_service.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
-import 'audio_handler.dart'; // 3단계에서 생성할 핸들러 파일
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:audio_session/audio_session.dart';
 
-// 전역 오디오 핸들러 인스턴스
-late OzAudioHandler _audioHandler;
+// 주의: 실제 프로젝트 경로에 맞게 import를 활성화해주세요.
+import 'package:oz_radio/models/chapter_models.dart'; 
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  // [수정] 오디오 서비스 초기화 (Line 7 대응)
-  _audioHandler = await AudioService.init(
-    builder: () => OzAudioHandler(),
-    config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.example.oz_radio.channel.audio',
-      androidNotificationChannelName: '오즈 라디오 재생',
-      androidStopForegroundOnPause: true,
-      notificationColor: Colors.brown,
-    ),
-  );
-
-  runApp(const OzRadioApp());
-}
+void main() => runApp(const OzRadioApp());
 
 class OzRadioApp extends StatelessWidget {
   const OzRadioApp({super.key});
@@ -33,7 +17,7 @@ class OzRadioApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        useMaterial3: true,
+        useMaterial3: true, 
         colorSchemeSeed: Colors.brown,
       ),
       home: const RadioModeScreen(),
@@ -49,56 +33,136 @@ class RadioModeScreen extends StatefulWidget {
 }
 
 class _RadioModeScreenState extends State<RadioModeScreen> {
-  // [수정] 기존 _tts, _isPlaying 변수 제거 (Line 42, 45 대응)
-  // 재생 로직은 핸들러가 담당하며 UI는 핸들러의 상태를 구독합니다.
+  final FlutterTts _tts = FlutterTts();
+  List<Paragraph> _paragraphs = [];
+  int _currentIndex = 0;
+  bool _isPlaying = false;
+
+  // 기획 반영: 번역 스타일 상태 변수 ('literary' 또는 'literal')
+  String _translationStyle = 'literary';
+
+  // Config 제어 변수
+  double _enSpeed = 0.5;
+  double _koSpeed = 0.7;
+  int _pauseShort = 800; 
+  int _pauseLong = 1100; 
+  String _orderType = "KO_EN"; 
 
   @override
   void initState() {
     super.initState();
+    _setupAudioSession(); 
+    _initTts();
     _loadAllData();
   }
 
   Future<void> _loadAllData() async {
-    // 설정값과 데이터를 로드하여 핸들러에 전달
-    await _loadConfig();
-    await _loadChapterData();
+    await _loadConfig();     
+    await _loadChapterData(); 
   }
 
   Future<void> _loadConfig() async {
     try {
       final String configString = await rootBundle.loadString('assets/config/playback_config.json');
       final configData = json.decode(configString);
-      
-      // 핸들러의 설정값 업데이트
-      _audioHandler.updateConfig(configData);
-      setState(() {}); 
+      setState(() {
+        _enSpeed = (configData['en_speed'] ?? 0.5).toDouble();
+        _koSpeed = (configData['ko_speed'] ?? 0.7).toDouble();
+        _pauseShort = configData['pause_short_ms'] ?? 800;
+        _pauseLong = configData['pause_long_ms'] ?? 1100;
+        _orderType = configData['order_type'] ?? "KO_EN";
+      });
     } catch (e) {
       debugPrint("Config load error: $e");
     }
+  }
+
+  Future<void> _initTts() async {
+    await _tts.awaitSpeakCompletion(true); 
+    if (!mounted) return;
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      await _tts.setEngine("com.google.android.tts");
+    }
+  }
+
+  Future<void> _setupAudioSession() async {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.speech());
+    await session.setActive(true);
   }
 
   Future<void> _loadChapterData() async {
     try {
       final String response = await rootBundle.loadString('assets/data/book1/chapter1.json');
       final data = json.decode(response);
-      
-      // 핸들러에 재생할 문단 데이터 전달
-      _audioHandler.setParagraphs(data['content']);
+      final chapter = Chapter.fromJson(data);
+      setState(() { 
+        _paragraphs = chapter.content; 
+      });
     } catch (e) {
       debugPrint("Data load error: $e");
     }
   }
 
-  // [수정] 재생/정지 제어 함수 (Line 101~151 로직 이관)
-  void _handlePlayback() {
-    final bool playing = _audioHandler.playbackState.value.playing;
-    if (playing) {
-      _audioHandler.pause();
-      WakelockPlus.disable(); // 정지 시 화면 꺼짐 방지 해제
-    } else {
-      _audioHandler.play();
-      WakelockPlus.enable();  // 재생 시 CPU/화면 유지 (Doze 모드 대응)
+  Future<void> _startRadio() async {
+    if (_paragraphs.isEmpty) return;
+    setState(() => _isPlaying = true);
+    
+    while (_isPlaying) {
+      final paragraph = _paragraphs[_currentIndex];
+      
+      // [핵심 로직] 문단이 시작될 때의 번역 모드를 캡처합니다.
+      // 이렇게 하면 중간에 토글을 바꿔도 현재 문단은 끝까지 캡처된 모드로 재생되고, 
+      // 다음 문단 루프가 시작될 때 새로운 모드가 반영됩니다.
+      final String activeStyleForThisParagraph = _translationStyle;
+
+      for (var s in paragraph.sentences) {
+        if (!_isPlaying) break;
+
+        // 캡처된 모드에 따라 읽어줄 텍스트 결정
+        String targetTranslation = activeStyleForThisParagraph == 'literary' 
+            ? s.translationLiterary 
+            : s.translationLiteral;
+
+        if (_orderType == "KO_EN") {
+          await _playTranslation(targetTranslation);
+          if (!_isPlaying) break;
+          await Future.delayed(Duration(milliseconds: _pauseShort));
+          await _playOriginal(s.original);
+        } else {
+          await _playOriginal(s.original);
+          if (!_isPlaying) break;
+          await Future.delayed(Duration(milliseconds: _pauseShort));
+          await _playTranslation(targetTranslation);
+        }
+
+        if (!_isPlaying) break;
+        await Future.delayed(Duration(milliseconds: _pauseLong));
+      }
+
+      if (!_isPlaying) break;
+
+      setState(() {
+        _currentIndex = (_currentIndex + 1) % _paragraphs.length;
+      });
     }
+  }
+
+  Future<void> _playOriginal(String text) async {
+    await _tts.setLanguage("en-US");
+    await _tts.setSpeechRate(_enSpeed); 
+    await _tts.speak(text);
+  }
+
+  Future<void> _playTranslation(String text) async {
+    await _tts.setLanguage("ko-KR");
+    await _tts.setSpeechRate(_koSpeed); 
+    await _tts.speak(text);
+  }
+
+  void _stopRadio() {
+    setState(() => _isPlaying = false);
+    _tts.stop();
   }
 
   @override
@@ -107,71 +171,66 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
       appBar: AppBar(
         title: const Text("OZ Radio MVP"),
         actions: [
-          // 재생 순서 토글
-          ValueListenableBuilder<String>(
-            valueListenable: _audioHandler.orderTypeNotifier,
-            builder: (context, orderType, _) {
-              return TextButton.icon(
-                onPressed: () => _audioHandler.toggleOrderType(),
-                icon: const Icon(Icons.swap_vert),
-                label: Text(orderType),
-              );
-            },
+          TextButton.icon(
+            onPressed: () => setState(() => _orderType = (_orderType == "EN_KO") ? "KO_EN" : "EN_KO"),
+            icon: const Icon(Icons.swap_vert),
+            label: Text(_orderType),
           )
         ],
       ),
       body: SingleChildScrollView(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 30.0, vertical: 50.0),
+          padding: const EdgeInsets.symmetric(horizontal: 30.0, vertical: 30.0),
           child: Column(
             children: [
               const Text("The Wizard of Oz", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
               const Text("Chapter 1: The Cyclone", style: TextStyle(color: Colors.grey)),
+              
               const SizedBox(height: 30),
               
-              // [수정] 현재 문단 번호 표시 (핸들러의 커스텀 상태 구독)
-              StreamBuilder<int>(
-                stream: _audioHandler.currentIndexStream,
-                builder: (context, snapshot) {
-                  final index = snapshot.data ?? 0;
-                  return Container(
-                    padding: const EdgeInsets.all(30),
-                    decoration: BoxDecoration(
-                      color: Colors.brown.withValues(alpha: 0.1), 
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text(
-                      "${index + 1}",
-                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.brown),
-                    ),
-                  );
-                }
+              // [신규 UI] 문학형 / 직역형 실시간 토글 버튼
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'literary', label: Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('문학형 (의역)'))),
+                  ButtonSegment(value: 'literal', label: Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('직역형 (끊어읽기)'))),
+                ],
+                selected: {_translationStyle},
+                onSelectionChanged: (Set<String> newSelection) {
+                  setState(() {
+                    _translationStyle = newSelection.first;
+                  });
+                },
+                style: SegmentedButton.styleFrom(
+                  selectedForegroundColor: Colors.white,
+                  selectedBackgroundColor: Colors.brown,
+                ),
+              ),
+
+              const SizedBox(height: 30),
+              
+              Container(
+                padding: const EdgeInsets.all(30),
+                decoration: BoxDecoration(
+                  color: Colors.brown.withValues(alpha: 0.1), 
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  "${_currentIndex + 1}",
+                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.brown),
+                ),
+              ),
+              
+              const SizedBox(height: 40),
+              FloatingActionButton.large(
+                onPressed: _isPlaying ? _stopRadio : _startRadio,
+                child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
               ),
               
               const SizedBox(height: 50),
-              
-              // [수정] 메인 재생/정지 버튼 (StreamBuilder 적용)
-              StreamBuilder<PlaybackState>(
-                stream: _audioHandler.playbackState,
-                builder: (context, snapshot) {
-                  final playing = snapshot.data?.playing ?? false;
-                  return FloatingActionButton.large(
-                    onPressed: _handlePlayback,
-                    child: Icon(playing ? Icons.pause : Icons.play_arrow),
-                  );
-                },
-              ),
-              
-              const SizedBox(height: 60),
-              // 속도 조절 슬라이더 (핸들러의 설정값 변경)
-              _buildSpeedSlider("영어 원문 속도", _audioHandler.enSpeed, (v) {
-                setState(() => _audioHandler.enSpeed = v);
-              }),
+              _buildSpeedSlider("영어 원문 속도", _enSpeed, (v) => setState(() => _enSpeed = v)),
               const SizedBox(height: 20),
-              _buildSpeedSlider("한국어 번역 속도", _audioHandler.koSpeed, (v) {
-                setState(() => _audioHandler.koSpeed = v);
-              }),
+              _buildSpeedSlider("한국어 번역 속도", _koSpeed, (v) => setState(() => _koSpeed = v)),
             ],
           ),
         ),
