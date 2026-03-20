@@ -80,9 +80,9 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
   Future<void> _initTts() async {
     await _tts.awaitSpeakCompletion(true); 
     if (!mounted) return;
-    if (Theme.of(context).platform == TargetPlatform.android) {
-      await _tts.setEngine("com.google.android.tts");
-    }
+    //if (Theme.of(context).platform == TargetPlatform.android) {
+      //await _tts.setEngine("com.google.android.tts");
+    //}
   }
 
   Future<void> _setupAudioSession() async {
