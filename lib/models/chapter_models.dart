@@ -1,56 +1,46 @@
-class Sentence {
-  final String original;
-  final String translationLiterary; // 문학형 번역
-  final String translationLiteral;  // 직역형 번역
+class Paragraph {
+  final int paragraphId;
+  final String originalText;
+  final String translationLiterary;
+  final String translationLiteral;
 
-  Sentence({
-    required this.original, 
-    required this.translationLiterary, 
-    required this.translationLiteral
+  Paragraph({
+    required this.paragraphId,
+    required this.originalText,
+    required this.translationLiterary,
+    required this.translationLiteral,
   });
 
-  factory Sentence.fromJson(Map<String, dynamic> json) {
-    return Sentence(
-      original: json['original'] ?? '',
-      // 데이터 파트에서 키를 분리하기 전까지는 기존 'translation' 값을 양쪽에 폴백(Fallback)으로 넣습니다.
-      translationLiterary: json['translation_literary'] ?? json['translation'] ?? '',
-      translationLiteral: json['translation_literal'] ?? json['translation'] ?? '',
-    );
-  }
-}
-
-class Paragraph {
-  final int paragraphIndex;
-  final List<Sentence> sentences;
-
-  Paragraph({required this.paragraphIndex, required this.sentences});
-
   factory Paragraph.fromJson(Map<String, dynamic> json) {
-    var list = json['sentences'] as List? ?? [];
-    List<Sentence> sentencesList = list.map((i) => Sentence.fromJson(i)).toList();
-    
     return Paragraph(
-      paragraphIndex: json['paragraph_index'] ?? 0,
-      sentences: sentencesList,
+      paragraphId: json['paragraph_id'] ?? 0,
+      originalText: json['original_text'] ?? '',
+      translationLiterary: json['translation_literary'] ?? '',
+      translationLiteral: json['translation_literal'] ?? '',
     );
   }
 }
 
 class Chapter {
-  final String chapterId;
-  final String title;
-  final List<Paragraph> content;
+  final String bookId;
+  final int chapter;
+  final List<Paragraph> paragraphs;
 
-  Chapter({required this.chapterId, required this.title, required this.content});
+  Chapter({
+    required this.bookId, 
+    required this.chapter, 
+    required this.paragraphs
+  });
 
   factory Chapter.fromJson(Map<String, dynamic> json) {
-    var list = json['content'] as List? ?? [];
-    List<Paragraph> contentList = list.map((i) => Paragraph.fromJson(i)).toList();
+    // 🚨 여기서 'content'가 아닌 'paragraphs' 키를 읽도록 수정했습니다!
+    var list = json['paragraphs'] as List? ?? [];
+    List<Paragraph> paragraphsList = list.map((i) => Paragraph.fromJson(i)).toList();
     
     return Chapter(
-      chapterId: json['chapter_id'] ?? '',
-      title: json['title'] ?? '',
-      content: contentList,
+      bookId: json['book_id'] ?? '',
+      chapter: json['chapter'] ?? 0,
+      paragraphs: paragraphsList,
     );
   }
 }

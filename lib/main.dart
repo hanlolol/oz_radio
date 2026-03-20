@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:audio_session/audio_session.dart';
 
-// 주의: 실제 프로젝트 경로에 맞게 import를 활성화해주세요.
+// 주의: 실제 경로에 맞게 맞춰주세요.
 import 'package:oz_radio/models/chapter_models.dart'; 
 
 void main() => runApp(const OzRadioApp());
@@ -38,10 +38,8 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
   int _currentIndex = 0;
   bool _isPlaying = false;
 
-  // 기획 반영: 번역 스타일 상태 변수 ('literary' 또는 'literal')
-  String _translationStyle = 'literary';
+  String _translationStyle = 'literary'; // literary(문학형) or literal(직역형)
 
-  // Config 제어 변수
   double _enSpeed = 0.5;
   double _koSpeed = 0.7;
   int _pauseShort = 800; 
@@ -80,9 +78,7 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
   Future<void> _initTts() async {
     await _tts.awaitSpeakCompletion(true); 
     if (!mounted) return;
-    //if (Theme.of(context).platform == TargetPlatform.android) {
-      //await _tts.setEngine("com.google.android.tts");
-    //}
+    // 기기(갤럭시 등) 기본 TTS를 사용하도록 구글 엔진 강제 코드를 제거했습니다.
   }
 
   Future<void> _setupAudioSession() async {
@@ -96,52 +92,51 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
       final String response = await rootBundle.loadString('assets/data/book1/chapter1.json');
       final data = json.decode(response);
       final chapter = Chapter.fromJson(data);
+      
       setState(() { 
-        _paragraphs = chapter.content; 
+        _paragraphs = chapter.paragraphs; 
       });
+      debugPrint("✅ JSON 로드 성공! 총 문단 수: ${_paragraphs.length}");
     } catch (e) {
-      debugPrint("Data load error: $e");
+      debugPrint("🚨 데이터 로드 에러: $e");
     }
   }
 
   Future<void> _startRadio() async {
-    if (_paragraphs.isEmpty) return;
+    if (_paragraphs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('데이터를 불러오지 못했습니다. 에셋 설정을 확인해주세요.')),
+      );
+      return;
+    }
+    
     setState(() => _isPlaying = true);
     
     while (_isPlaying) {
       final paragraph = _paragraphs[_currentIndex];
       
-      // [핵심 로직] 문단이 시작될 때의 번역 모드를 캡처합니다.
-      // 이렇게 하면 중간에 토글을 바꿔도 현재 문단은 끝까지 캡처된 모드로 재생되고, 
-      // 다음 문단 루프가 시작될 때 새로운 모드가 반영됩니다.
-      final String activeStyleForThisParagraph = _translationStyle;
+      // 기획 반영: 문단이 시작될 때의 번역 모드를 캡처합니다.
+      final String activeStyle = _translationStyle;
+      String targetTranslation = activeStyle == 'literary' 
+          ? paragraph.translationLiterary 
+          : paragraph.translationLiteral;
 
-      for (var s in paragraph.sentences) {
+      if (_orderType == "KO_EN") {
+        await _playTranslation(targetTranslation);
         if (!_isPlaying) break;
-
-        // 캡처된 모드에 따라 읽어줄 텍스트 결정
-        String targetTranslation = activeStyleForThisParagraph == 'literary' 
-            ? s.translationLiterary 
-            : s.translationLiteral;
-
-        if (_orderType == "KO_EN") {
-          await _playTranslation(targetTranslation);
-          if (!_isPlaying) break;
-          await Future.delayed(Duration(milliseconds: _pauseShort));
-          await _playOriginal(s.original);
-        } else {
-          await _playOriginal(s.original);
-          if (!_isPlaying) break;
-          await Future.delayed(Duration(milliseconds: _pauseShort));
-          await _playTranslation(targetTranslation);
-        }
-
+        await Future.delayed(Duration(milliseconds: _pauseShort));
+        await _playOriginal(paragraph.originalText);
+      } else {
+        await _playOriginal(paragraph.originalText);
         if (!_isPlaying) break;
-        await Future.delayed(Duration(milliseconds: _pauseLong));
+        await Future.delayed(Duration(milliseconds: _pauseShort));
+        await _playTranslation(targetTranslation);
       }
 
       if (!_isPlaying) break;
+      await Future.delayed(Duration(milliseconds: _pauseLong));
 
+      if (!_isPlaying) break;
       setState(() {
         _currentIndex = (_currentIndex + 1) % _paragraphs.length;
       });
@@ -189,11 +184,10 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
               
               const SizedBox(height: 30),
               
-              // [신규 UI] 문학형 / 직역형 실시간 토글 버튼
               SegmentedButton<String>(
                 segments: const [
-                  ButtonSegment(value: 'literary', label: Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('문학형 (의역)'))),
-                  ButtonSegment(value: 'literal', label: Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('직역형 (끊어읽기)'))),
+                  ButtonSegment(value: 'literary', label: Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('문학형'))),
+                  ButtonSegment(value: 'literal', label: Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('직역형'))),
                 ],
                 selected: {_translationStyle},
                 onSelectionChanged: (Set<String> newSelection) {
