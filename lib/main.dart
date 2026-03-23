@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:audio_session/audio_session.dart';
 
-// 주의: 실제 경로에 맞게 맞춰주세요.
+// 주의: 실제 프로젝트 경로에 맞게 맞춰주세요.
 import 'package:oz_radio/models/chapter_models.dart'; 
 
 void main() => runApp(const OzRadioApp());
@@ -38,8 +38,10 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
   int _currentIndex = 0;
   bool _isPlaying = false;
 
-  String _translationStyle = 'literary'; // literary(문학형) or literal(직역형)
+  // 번역 스타일 상태 변수
+  String _translationStyle = 'literary';
 
+  // Config 제어 변수
   double _enSpeed = 0.5;
   double _koSpeed = 0.7;
   int _pauseShort = 800; 
@@ -78,7 +80,6 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
   Future<void> _initTts() async {
     await _tts.awaitSpeakCompletion(true); 
     if (!mounted) return;
-    // 기기(갤럭시 등) 기본 TTS를 사용하도록 구글 엔진 강제 코드를 제거했습니다.
   }
 
   Future<void> _setupAudioSession() async {
@@ -105,7 +106,7 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
   Future<void> _startRadio() async {
     if (_paragraphs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('데이터를 불러오지 못했습니다. 에셋 설정을 확인해주세요.')),
+        const SnackBar(content: Text('데이터를 불러오지 못했습니다. JSON 구조를 확인해주세요.')),
       );
       return;
     }
@@ -115,28 +116,36 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     while (_isPlaying) {
       final paragraph = _paragraphs[_currentIndex];
       
-      // 기획 반영: 문단이 시작될 때의 번역 모드를 캡처합니다.
+      // 기획 규칙: 문단 단위로 재생 스타일 캡처
       final String activeStyle = _translationStyle;
-      String targetTranslation = activeStyle == 'literary' 
-          ? paragraph.translationLiterary 
-          : paragraph.translationLiteral;
 
-      if (_orderType == "KO_EN") {
-        await _playTranslation(targetTranslation);
+      for (var sentence in paragraph.sentences) {
         if (!_isPlaying) break;
-        await Future.delayed(Duration(milliseconds: _pauseShort));
-        await _playOriginal(paragraph.originalText);
-      } else {
-        await _playOriginal(paragraph.originalText);
+
+        // 캡처된 스타일에 따라 읽을 한국어 번역본 결정
+        String targetTranslation = activeStyle == 'literary' 
+            ? sentence.translationLiterary 
+            : sentence.translationLiteral;
+
+        // 데이터가 비어있지 않은 경우에만 읽도록 방어 로직 추가
+        if (_orderType == "KO_EN") {
+          if (targetTranslation.isNotEmpty) await _playTranslation(targetTranslation);
+          if (!_isPlaying) break;
+          await Future.delayed(Duration(milliseconds: _pauseShort));
+          if (sentence.originalText.isNotEmpty) await _playOriginal(sentence.originalText);
+        } else {
+          if (sentence.originalText.isNotEmpty) await _playOriginal(sentence.originalText);
+          if (!_isPlaying) break;
+          await Future.delayed(Duration(milliseconds: _pauseShort));
+          if (targetTranslation.isNotEmpty) await _playTranslation(targetTranslation);
+        }
+
         if (!_isPlaying) break;
-        await Future.delayed(Duration(milliseconds: _pauseShort));
-        await _playTranslation(targetTranslation);
+        await Future.delayed(Duration(milliseconds: _pauseLong));
       }
 
       if (!_isPlaying) break;
-      await Future.delayed(Duration(milliseconds: _pauseLong));
-
-      if (!_isPlaying) break;
+      
       setState(() {
         _currentIndex = (_currentIndex + 1) % _paragraphs.length;
       });
