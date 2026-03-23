@@ -95,15 +95,27 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     }
   }
 
+// 데이터 로드 로직
   Future<void> _loadChapterData() async {
     try {
       final String response = await rootBundle.loadString('assets/data/book1/chapter1.json');
-      final data = json.decode(response);
+      // 최상위를 Map<String, dynamic>으로 명시적 캐스팅
+      final Map<String, dynamic> data = json.decode(response);
+      
       setState(() { 
-        _paragraphs = data['content']; 
+        // 'content' 키가 존재하고 null이 아닐 경우에만 안전하게 List로 변환하여 할당
+        if (data.containsKey('content') && data['content'] != null) {
+          _paragraphs = List<dynamic>.from(data['content']);
+        } else {
+          _paragraphs = []; // 데이터가 없을 경우 빈 리스트로 초기화하여 Null 에러 방지
+        }
       });
     } catch (e) {
       debugPrint("Data load error: $e");
+      // 에러 발생 시 UI가 멈추지 않도록 빈 리스트 처리
+      setState(() {
+        _paragraphs = [];
+      });
     }
   }
 
