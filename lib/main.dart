@@ -16,18 +16,17 @@ class OzRadioApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true, 
         colorSchemeSeed: Colors.brown,
-        scaffoldBackgroundColor: const Color(0xFFF9F6F0), // 라디오 느낌의 따뜻한 배경색
+        scaffoldBackgroundColor: const Color(0xFFF9F6F0),
       ),
       home: const RadioModeScreen(),
     );
   }
 }
 
-// --- 현재 재생 상태를 추적하는 데이터 모델 ---
 class PlaybackState {
   final int paragraphIndex;
   final int sentenceIndex;
-  final String lang; // "EN" or "KO"
+  final String lang;
   
   PlaybackState(this.paragraphIndex, this.sentenceIndex, this.lang);
 }
@@ -44,18 +43,17 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
   List<dynamic> _paragraphs = [];
   bool _isPlaying = false;
 
-  // 상태 관리: 재생 중인 위치 정보 (ValueNotifier로 국소 리빌드 최적화)
   final ValueNotifier<PlaybackState?> _playbackNotifier = ValueNotifier(null);
-  
-  // 스크롤 제어: 자동 스크롤을 위한 컨트롤러
   final ScrollController _scrollController = ScrollController();
 
-  // Config 제어 변수 (초기값)
   double _enSpeed = 0.5;
   double _koSpeed = 0.7;
   int _pauseShort = 800;
   int _pauseLong = 1100;
   String _orderType = "KO_EN";
+  
+  // [추가됨] 번역 모드 상태 변수 (false: 의역, true: 직역)
+  bool _useLiteral = false; 
 
   @override
   void initState() {
@@ -73,7 +71,6 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     super.dispose();
   }
 
-  // 데이터 로드 로직
   Future<void> _loadAllData() async {
     await _loadConfig();     
     await _loadChapterData();
@@ -95,27 +92,21 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     }
   }
 
-// 데이터 로드 로직
   Future<void> _loadChapterData() async {
     try {
       final String response = await rootBundle.loadString('assets/data/book1/chapter1.json');
-      // 최상위를 Map<String, dynamic>으로 명시적 캐스팅
       final Map<String, dynamic> data = json.decode(response);
       
       setState(() { 
-        // 'content' 키가 존재하고 null이 아닐 경우에만 안전하게 List로 변환하여 할당
-        if (data.containsKey('content') && data['content'] != null) {
-          _paragraphs = List<dynamic>.from(data['content']);
+        if (data.containsKey('paragraphs') && data['paragraphs'] != null) {
+          _paragraphs = List<dynamic>.from(data['paragraphs']);
         } else {
-          _paragraphs = []; // 데이터가 없을 경우 빈 리스트로 초기화하여 Null 에러 방지
+          _paragraphs = []; 
         }
       });
     } catch (e) {
       debugPrint("Data load error: $e");
-      // 에러 발생 시 UI가 멈추지 않도록 빈 리스트 처리
-      setState(() {
-        _paragraphs = [];
-      });
+      setState(() => _paragraphs = []);
     }
   }
 
@@ -134,20 +125,25 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     await session.setActive(true);
   }
 
-  // [핵심] 재생 로직 및 상태 업데이트 동기화
+  // [추가됨] 현재 모드에 맞는 번역 텍스트를 반환하는 헬퍼 함수
+  String _getCurrentTranslation(dynamic sentenceData) {
+    if (_useLiteral && sentenceData['translation_literal'] != null) {
+      return sentenceData['translation_literal'];
+    }
+    return sentenceData['translation_literary'] ?? '';
+  }
+
   Future<void> _startRadio() async {
     if (_paragraphs.isEmpty) return;
     setState(() => _isPlaying = true);
     
-    // 이전에 멈춘 문단이 있다면 그곳부터, 없으면 0부터 시작
     int currentPIndex = _playbackNotifier.value?.paragraphIndex ?? 0;
     
     while (_isPlaying) {
       if (currentPIndex >= _paragraphs.length) {
-        currentPIndex = 0; // 챕터 루프
+        currentPIndex = 0;
       }
 
-      // 1. 재생 시작 시 해당 문단으로 자동 스크롤 애니메이션
       _scrollToActiveParagraph(currentPIndex);
 
       final paragraph = _paragraphs[currentPIndex];
@@ -156,27 +152,26 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
       for (int sIndex = 0; sIndex < sentences.length; sIndex++) {
         var s = sentences[sIndex];
         if (!_isPlaying) break;
+        
+        // 현재 설정된 모드(의역/직역)에 따른 텍스트 가져오기
+        final currentKoText = _getCurrentTranslation(s);
 
         if (_orderType == "KO_EN") {
-          // 상태 업데이트: 한국어 번역문 재생
           _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "KO");
-          await _playTranslation(s['translation']);
+          await _playTranslation(currentKoText); // 동적 텍스트 재생
           if (!_isPlaying) break;
           await Future.delayed(Duration(milliseconds: _pauseShort));
 
-          // 상태 업데이트: 영어 원문 재생
           _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "EN");
-          await _playOriginal(s['original']);
+          await _playOriginal(s['original_text']);
         } else {
-          // 상태 업데이트: 영어 원문 재생
           _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "EN");
-          await _playOriginal(s['original']);
+          await _playOriginal(s['original_text']);
           if (!_isPlaying) break;
           await Future.delayed(Duration(milliseconds: _pauseShort));
 
-          // 상태 업데이트: 한국어 번역문 재생
           _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "KO");
-          await _playTranslation(s['translation']);
+          await _playTranslation(currentKoText); // 동적 텍스트 재생
         }
 
         if (!_isPlaying) break;
@@ -184,14 +179,12 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
       }
 
       if (!_isPlaying) break;
-      currentPIndex++; // 다음 문단으로 이동
+      currentPIndex++; 
     }
   }
 
-  // 자동 스크롤 함수
   void _scrollToActiveParagraph(int index) {
     if (!_scrollController.hasClients) return;
-    // 대략적인 문단 높이(200.0)를 기준으로 스크롤
     final double targetOffset = index * 200.0; 
     _scrollController.animateTo(
       targetOffset,
@@ -223,16 +216,28 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
       appBar: AppBar(
         title: const Text("OZ Radio", style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
+          // [추가됨] 의역/직역 전환 토글 버튼
+          TextButton.icon(
+            onPressed: () {
+              setState(() {
+                _useLiteral = !_useLiteral;
+              });
+            },
+            icon: Icon(_useLiteral ? Icons.translate : Icons.auto_stories),
+            label: Text(_useLiteral ? "직역" : "의역"),
+            style: TextButton.styleFrom(foregroundColor: Colors.brown[800]),
+          ),
+          // 기존 재생 순서 토글 버튼
           TextButton.icon(
             onPressed: () => setState(() => _orderType = (_orderType == "EN_KO") ? "KO_EN" : "EN_KO"),
             icon: const Icon(Icons.swap_vert),
             label: Text(_orderType),
+            style: TextButton.styleFrom(foregroundColor: Colors.brown[800]),
           )
         ],
       ),
       body: Column(
         children: [
-          // 본문 영역 (ListView)
           Expanded(
             child: _paragraphs.isEmpty 
               ? const Center(child: CircularProgressIndicator())
@@ -244,7 +249,6 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
                     final paragraph = _paragraphs[pIndex];
                     final List<dynamic> sentences = paragraph['sentences'];
 
-                    // [핵심] ValueListenableBuilder를 통한 국소 렌더링
                     return ValueListenableBuilder<PlaybackState?>(
                       valueListenable: _playbackNotifier,
                       builder: (context, playState, child) {
@@ -252,7 +256,7 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
 
                         return AnimatedOpacity(
                           duration: const Duration(milliseconds: 500),
-                          opacity: isActiveParagraph ? 1.0 : 0.4, // 비활성 문단 Dim 처리
+                          opacity: isActiveParagraph ? 1.0 : 0.4, 
                           child: Container(
                             margin: const EdgeInsets.only(bottom: 30),
                             padding: const EdgeInsets.only(left: 15),
@@ -260,7 +264,7 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
                               border: Border(
                                 left: BorderSide(
                                   color: isActiveParagraph ? Colors.brown : Colors.transparent, 
-                                  width: 4 // 활성 문단 좌측 인디케이터 바
+                                  width: 4 
                                 )
                               )
                             ),
@@ -270,9 +274,11 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
                                 int sIndex = entry.key;
                                 var s = entry.value;
                                 
-                                // 활성 문단 내에서 현재 재생 중인 문장/언어 추적
                                 bool isPlayingEN = isActiveParagraph && playState?.sentenceIndex == sIndex && playState?.lang == "EN";
                                 bool isPlayingKO = isActiveParagraph && playState?.sentenceIndex == sIndex && playState?.lang == "KO";
+
+                                // [핵심] 현재 선택된 모드(의역/직역)에 맞춰 화면의 한국어 텍스트도 변경
+                                final displayKoText = _getCurrentTranslation(s);
 
                                 return Padding(
                                   padding: const EdgeInsets.only(bottom: 15.0),
@@ -280,7 +286,7 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        s['original'],
+                                        s['original_text'],
                                         style: TextStyle(
                                           fontSize: 18,
                                           fontWeight: isPlayingEN ? FontWeight.bold : FontWeight.normal,
@@ -289,7 +295,7 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        s['translation'],
+                                        displayKoText, // 동적으로 직역/의역 텍스트 출력
                                         style: TextStyle(
                                           fontSize: 15,
                                           fontWeight: isPlayingKO ? FontWeight.bold : FontWeight.normal,
@@ -309,14 +315,13 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
                 ),
           ),
           
-          // 하단 컨트롤러 영역 (고정)
           Container(
             padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 30),
             decoration: BoxDecoration(
               color: Colors.white,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05), // 최신 버전에 맞게 수정된 부분
+                  color: Colors.black.withValues(alpha: 0.05), 
                   blurRadius: 10, 
                   offset: const Offset(0, -5),
                 )
