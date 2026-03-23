@@ -1,29 +1,35 @@
 class Paragraph {
   final int id;
-  final String original;
-  final String translation;
+  final String original;           // 영어 원문
+  final String translationLiterary;  // 의역
+  final String translationLiteral;   // 직역
+
   final double originalSpeed;
-  final double midGap; // 원문과 번역 사이 무음
-  final double postGap; // 문단 간 무음
+  final double midGap;
+  final double postGap;
 
   Paragraph({
     required this.id,
     required this.original,
-    required this.translation,
+    required this.translationLiterary,
+    required this.translationLiteral,
     this.originalSpeed = 0.92,
     this.midGap = 0.8,
     this.postGap = 1.1,
   });
 
-  // JSON에서 객체로 변환하는 팩토리 메서드
   factory Paragraph.fromJson(Map<String, dynamic> json) {
+    final settings = json['settings'] as Map<String, dynamic>? ?? {};
+    
     return Paragraph(
-      id: json['paragraph_id'],
-      original: json['original'],
-      translation: json['translation'],
-      originalSpeed: json['settings']['original_speed'],
-      midGap: json['settings']['mid_gap'],
-      postGap: json['settings']['post_gap'],
+      id: json['paragraph_id'] ?? 0,
+      // 🚨 [수정] JSON의 'original_text'를 우선적으로 읽어옵니다.
+      original: json['original_text'] ?? json['original'] ?? '', 
+      translationLiterary: json['translation_literary'] ?? json['translation'] ?? '',
+      translationLiteral: json['translation_literal'] ?? '',
+      originalSpeed: (settings['original_speed'] ?? 0.92).toDouble(),
+      midGap: (settings['mid_gap'] ?? 0.8).toDouble(),
+      postGap: (settings['post_gap'] ?? 1.1).toDouble(),
     );
   }
 }

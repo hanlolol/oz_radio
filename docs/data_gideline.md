@@ -22,7 +22,7 @@ o	book_id: 작품 식별자
 o	chapter: 챕터 번호
 o	paragraphs: 문단 객체들의 배열
 	paragraph_id: 문단 순서 번호
-	original_text: 원문 (분리/병합 규칙이 적용된 텍스트)
+	original: 원문 (분리/병합 규칙이 적용된 텍스트)
 	translation_literary: 자연스러운 문학적 의역
 	translation_literal: 어순 유지 및 의미 단위 직역
 [JSON 구조 예시]
@@ -33,15 +33,16 @@ JSON
   "paragraphs": [
     {
       "paragraph_id": 1,
-      "original_text": "원문 문장입니다.",
-      "translation_literary": "한국어 화자에게 자연스럽게 들리도록 다듬어진 번역입니다.",
-      "translation_literal": "어순을, 유지하며, 의미 단위로, 번역된, 직역입니다."
+      "original": "Dorothy lived in the midst of the great Kansas prairies...", 
+      "translation_literary": "도로시는 거대한 초원 한복판에서 살았습니다.",
+      "translation_literal": "도로시는 살았습니다, 한복판에, 거대한 캔자스 초원의,"
     }
   ]
 }
 2. 핵심 생성 규칙 (Content Rules) - [문단 통합형 업데이트]
 ① 문단(Paragraph) 구성 원칙
-1:1 매칭: 원문의 한 문단은 반드시 JSON 내 하나의 paragraphs 객체로 매칭됩니다.
+원문의 물리적 문단에 얽매이지 않고, **사용자가 한 번에 듣고 이해할 수 있는 '청취 단위'**를 하나의 객체로 매칭한다.
+문학 작품의 특성상 한 문단이 지나치게 길 경우, 이를 의미가 꺾이는 지점에서 전략적으로 분리하여 여러 개의 객체로 구성한다. (권장: 원문 기준 1~3문장, 재생 시간 20초 내외)
 최소 제어 단위: 앱 내에서 '이전/다음' 이동 및 '재생'의 최소 단위는 문단입니다. 따라서 하나의 문단 객체는 그 자체로 완벽한 장면이나 묘사를 포함해야 합니다.
 ② 텍스트 구성 및 흐름 제어 (청취 리듬 최적화)
 더 이상 문장을 배열로 쪼개지 않으므로, 하나의 긴 문자열 내에서 TTS(음성 합성)의 호흡을 조절하는 것이 중요합니다.

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:oz_radio/models/paragraph.dart';
 
 void main() => runApp(const OzRadioApp());
 
@@ -14,7 +15,7 @@ class OzRadioApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        useMaterial3: true, 
+        useMaterial3: true,
         colorSchemeSeed: Colors.brown,
         scaffoldBackgroundColor: const Color(0xFFF9F6F0),
       ),
@@ -25,10 +26,8 @@ class OzRadioApp extends StatelessWidget {
 
 class PlaybackState {
   final int paragraphIndex;
-  final int sentenceIndex;
   final String lang;
-  
-  PlaybackState(this.paragraphIndex, this.sentenceIndex, this.lang);
+  PlaybackState(this.paragraphIndex, this.lang);
 }
 
 class RadioModeScreen extends StatefulWidget {
@@ -40,27 +39,23 @@ class RadioModeScreen extends StatefulWidget {
 
 class _RadioModeScreenState extends State<RadioModeScreen> {
   final FlutterTts _tts = FlutterTts();
-  List<dynamic> _paragraphs = [];
+  List<Paragraph> _paragraphs = [];
   bool _isPlaying = false;
 
   final ValueNotifier<PlaybackState?> _playbackNotifier = ValueNotifier(null);
   final ScrollController _scrollController = ScrollController();
 
-  double _enSpeed = 0.5;
-  double _koSpeed = 0.7;
-  int _pauseShort = 800;
-  int _pauseLong = 1100;
+  double _enSpeed = 0.45;
+  double _koSpeed = 0.55;
   String _orderType = "KO_EN";
-  
-  // [추가됨] 번역 모드 상태 변수 (false: 의역, true: 직역)
-  bool _useLiteral = false; 
+  bool _useLiteral = false;
 
   @override
   void initState() {
     super.initState();
     _setupAudioSession();
     _initTts();
-    _loadAllData();
+    _loadChapterData();
   }
 
   @override
@@ -71,42 +66,18 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     super.dispose();
   }
 
-  Future<void> _loadAllData() async {
-    await _loadConfig();     
-    await _loadChapterData();
-  }
-
-  Future<void> _loadConfig() async {
-    try {
-      final String configString = await rootBundle.loadString('assets/config/playback_config.json');
-      final configData = json.decode(configString);
-      setState(() {
-        _enSpeed = configData['en_speed'] ?? 0.5;
-        _koSpeed = configData['ko_speed'] ?? 0.7;
-        _pauseShort = configData['pause_short_ms'] ?? 800;
-        _pauseLong = configData['pause_long_ms'] ?? 1100;
-        _orderType = configData['order_type'] ?? "KO_EN";
-      });
-    } catch (e) {
-      debugPrint("Config load error: $e");
-    }
-  }
-
   Future<void> _loadChapterData() async {
     try {
       final String response = await rootBundle.loadString('assets/data/book1/chapter1.json');
       final Map<String, dynamic> data = json.decode(response);
-      
-      setState(() { 
-        if (data.containsKey('paragraphs') && data['paragraphs'] != null) {
-          _paragraphs = List<dynamic>.from(data['paragraphs']);
-        } else {
-          _paragraphs = []; 
-        }
+      if (!mounted) return;
+      setState(() {
+        _paragraphs = (data['paragraphs'] as List)
+            .map((p) => Paragraph.fromJson(p))
+            .toList();
       });
     } catch (e) {
-      debugPrint("Data load error: $e");
-      setState(() => _paragraphs = []);
+      debugPrint("❌ Data load error: $e");
     }
   }
 
@@ -116,7 +87,6 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     if (Theme.of(context).platform == TargetPlatform.android) {
       await _tts.setEngine("com.google.android.tts");
     }
-    await _tts.setLanguage("en-US");
   }
 
   Future<void> _setupAudioSession() async {
@@ -125,83 +95,57 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     await session.setActive(true);
   }
 
-  // [추가됨] 현재 모드에 맞는 번역 텍스트를 반환하는 헬퍼 함수
-  String _getCurrentTranslation(dynamic sentenceData) {
-    if (_useLiteral && sentenceData['translation_literal'] != null) {
-      return sentenceData['translation_literal'];
-    }
-    return sentenceData['translation_literary'] ?? '';
-  }
-
+  // [핵심 로직] 문단 전환 시 스크롤 초기화 포함
   Future<void> _startRadio() async {
     if (_paragraphs.isEmpty) return;
     setState(() => _isPlaying = true);
     
-    int currentPIndex = _playbackNotifier.value?.paragraphIndex ?? 0;
-    
+    int currentIndex = _playbackNotifier.value?.paragraphIndex ?? 0;
+
     while (_isPlaying) {
-      if (currentPIndex >= _paragraphs.length) {
-        currentPIndex = 0;
+      if (currentIndex >= _paragraphs.length) currentIndex = 0;
+      
+      final p = _paragraphs[currentIndex];
+      final String koText = _useLiteral ? p.translationLiteral : p.translationLiterary;
+
+      // 1. 문단 시작 시 상태 업데이트 (UI에서 리스트가 sublist로 잘림)
+      _playbackNotifier.value = PlaybackState(currentIndex, _orderType.startsWith("KO") ? "KO" : "EN");
+      
+      // 2. [수정] 데이터가 잘린 후 스크롤 위치를 즉시 0(최상단)으로 강제 고정
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(0);
       }
 
-      _scrollToActiveParagraph(currentPIndex);
-
-      final paragraph = _paragraphs[currentPIndex];
-      final List<dynamic> sentences = paragraph['sentences'];
-
-      for (int sIndex = 0; sIndex < sentences.length; sIndex++) {
-        var s = sentences[sIndex];
+      if (_orderType == "KO_EN") {
         if (!_isPlaying) break;
-        
-        // 현재 설정된 모드(의역/직역)에 따른 텍스트 가져오기
-        final currentKoText = _getCurrentTranslation(s);
-
-        if (_orderType == "KO_EN") {
-          _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "KO");
-          await _playTranslation(currentKoText); // 동적 텍스트 재생
-          if (!_isPlaying) break;
-          await Future.delayed(Duration(milliseconds: _pauseShort));
-
-          _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "EN");
-          await _playOriginal(s['original_text']);
-        } else {
-          _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "EN");
-          await _playOriginal(s['original_text']);
-          if (!_isPlaying) break;
-          await Future.delayed(Duration(milliseconds: _pauseShort));
-
-          _playbackNotifier.value = PlaybackState(currentPIndex, sIndex, "KO");
-          await _playTranslation(currentKoText); // 동적 텍스트 재생
-        }
+        _playbackNotifier.value = PlaybackState(currentIndex, "KO");
+        await _playTTS(koText, "ko-KR", _koSpeed);
+        await Future.delayed(Duration(milliseconds: (p.midGap * 1000).toInt()));
 
         if (!_isPlaying) break;
-        await Future.delayed(Duration(milliseconds: _pauseLong));
+        _playbackNotifier.value = PlaybackState(currentIndex, "EN");
+        await _playTTS(p.original, "en-US", _enSpeed);
+      } else {
+        if (!_isPlaying) break;
+        _playbackNotifier.value = PlaybackState(currentIndex, "EN");
+        await _playTTS(p.original, "en-US", _enSpeed);
+        await Future.delayed(Duration(milliseconds: (p.midGap * 1000).toInt()));
+
+        if (!_isPlaying) break;
+        _playbackNotifier.value = PlaybackState(currentIndex, "KO");
+        await _playTTS(koText, "ko-KR", _koSpeed);
       }
 
       if (!_isPlaying) break;
-      currentPIndex++; 
+      await Future.delayed(Duration(milliseconds: (p.postGap * 1000).toInt()));
+      currentIndex++;
     }
   }
 
-  void _scrollToActiveParagraph(int index) {
-    if (!_scrollController.hasClients) return;
-    final double targetOffset = index * 200.0; 
-    _scrollController.animateTo(
-      targetOffset,
-      duration: const Duration(milliseconds: 800),
-      curve: Curves.easeInOut,
-    );
-  }
-
-  Future<void> _playOriginal(String text) async {
-    await _tts.setLanguage("en-US");
-    await _tts.setSpeechRate(_enSpeed);
-    await _tts.speak(text);
-  }
-
-  Future<void> _playTranslation(String text) async {
-    await _tts.setLanguage("ko-KR");
-    await _tts.setSpeechRate(_koSpeed);
+  Future<void> _playTTS(String text, String lang, double speed) async {
+    if (text.isEmpty) return;
+    await _tts.setLanguage(lang);
+    await _tts.setSpeechRate(speed);
     await _tts.speak(text);
   }
 
@@ -210,135 +154,144 @@ class _RadioModeScreenState extends State<RadioModeScreen> {
     _tts.stop();
   }
 
+  Widget _buildSpeedSlider(String label, double value, Function(double) onChanged) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 25),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.brown)),
+              Text(value.toStringAsFixed(2), style: const TextStyle(fontSize: 11, color: Colors.brown)),
+            ],
+          ),
+        ),
+        Slider(
+          value: value,
+          min: 0.1,
+          max: 1.0,
+          activeColor: Colors.brown,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("OZ Radio", style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
-          // [추가됨] 의역/직역 전환 토글 버튼
-          TextButton.icon(
-            onPressed: () {
-              setState(() {
-                _useLiteral = !_useLiteral;
-              });
-            },
-            icon: Icon(_useLiteral ? Icons.translate : Icons.auto_stories),
+          ChoiceChip(
             label: Text(_useLiteral ? "직역" : "의역"),
-            style: TextButton.styleFrom(foregroundColor: Colors.brown[800]),
+            selected: true,
+            onSelected: (val) => setState(() => _useLiteral = !_useLiteral),
+            selectedColor: Colors.brown[200],
           ),
-          // 기존 재생 순서 토글 버튼
+          const SizedBox(width: 8),
+          // [수정] 순서 버튼: 화살표 + 우선순위 언어 표시
           TextButton.icon(
             onPressed: () => setState(() => _orderType = (_orderType == "EN_KO") ? "KO_EN" : "EN_KO"),
-            icon: const Icon(Icons.swap_vert),
-            label: Text(_orderType),
-            style: TextButton.styleFrom(foregroundColor: Colors.brown[800]),
-          )
+            icon: const Icon(Icons.swap_vert, size: 20),
+            label: Text(_orderType == "KO_EN" ? "한 ➔ 영" : "영 ➔ 한"),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.brown[900],
+              backgroundColor: Colors.brown.withValues(alpha: 0.1),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+            ),
+          ),
+          const SizedBox(width: 10),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _paragraphs.isEmpty 
-              ? const Center(child: CircularProgressIndicator())
-              : ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
-                  itemCount: _paragraphs.length,
-                  itemBuilder: (context, pIndex) {
-                    final paragraph = _paragraphs[pIndex];
-                    final List<dynamic> sentences = paragraph['sentences'];
+      body: ValueListenableBuilder<PlaybackState?>(
+        valueListenable: _playbackNotifier,
+        builder: (context, state, child) {
+          if (_paragraphs.isEmpty) return const Center(child: CircularProgressIndicator());
 
-                    return ValueListenableBuilder<PlaybackState?>(
-                      valueListenable: _playbackNotifier,
-                      builder: (context, playState, child) {
-                        final isActiveParagraph = (playState?.paragraphIndex == pIndex);
+          // 현재 인덱스 기준으로 이전 데이터 삭제
+          int currentIndex = state?.paragraphIndex ?? 0;
+          List<Paragraph> visibleParagraphs = _paragraphs.sublist(currentIndex);
 
-                        return AnimatedOpacity(
-                          duration: const Duration(milliseconds: 500),
-                          opacity: isActiveParagraph ? 1.0 : 0.4, 
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 30),
-                            padding: const EdgeInsets.only(left: 15),
-                            decoration: BoxDecoration(
-                              border: Border(
-                                left: BorderSide(
-                                  color: isActiveParagraph ? Colors.brown : Colors.transparent, 
-                                  width: 4 
-                                )
-                              )
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: sentences.asMap().entries.map((entry) {
-                                int sIndex = entry.key;
-                                var s = entry.value;
-                                
-                                bool isPlayingEN = isActiveParagraph && playState?.sentenceIndex == sIndex && playState?.lang == "EN";
-                                bool isPlayingKO = isActiveParagraph && playState?.sentenceIndex == sIndex && playState?.lang == "KO";
+          return ListView.builder(
+            controller: _scrollController,
+            // 🚨 physics를 NeverScrollableScrollPhysics로 설정하면 자동 모드 느낌이 강해지지만,
+            // 사용자가 직접 볼 수 있게 BouncingScrollPhysics 정도를 추천합니다.
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+            itemCount: visibleParagraphs.length,
+            itemBuilder: (context, index) {
+              final p = visibleParagraphs[index];
+              bool isCurrent = index == 0; 
+              bool isEnActive = isCurrent && state?.lang == "EN";
+              bool isKoActive = isCurrent && state?.lang == "KO";
 
-                                // [핵심] 현재 선택된 모드(의역/직역)에 맞춰 화면의 한국어 텍스트도 변경
-                                final displayKoText = _getCurrentTranslation(s);
-
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 15.0),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        s['original_text'],
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: isPlayingEN ? FontWeight.bold : FontWeight.normal,
-                                          color: isPlayingEN ? Colors.brown[900] : Colors.black87,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        displayKoText, // 동적으로 직역/의역 텍스트 출력
-                                        style: TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: isPlayingKO ? FontWeight.bold : FontWeight.normal,
-                                          color: isPlayingKO ? Colors.brown[600] : Colors.grey[700],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 500),
+                margin: const EdgeInsets.only(bottom: 25),
+                padding: const EdgeInsets.all(24), // 패딩을 늘려 현재 문단 강조
+                decoration: BoxDecoration(
+                  color: isCurrent ? Colors.white : Colors.white.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: isCurrent ? [
+                    BoxShadow(
+                      color: Colors.brown.withValues(alpha: 0.1), 
+                      blurRadius: 20, 
+                      offset: const Offset(0, 10)
+                    )
+                  ] : [],
+                  border: Border.all(
+                    color: isCurrent ? Colors.brown.withValues(alpha: 0.4) : Colors.transparent,
+                    width: 1.5,
+                  ),
                 ),
-          ),
-          
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 30),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05), 
-                  blurRadius: 10, 
-                  offset: const Offset(0, -5),
-                )
-              ]
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                FloatingActionButton.large(
-                  onPressed: _isPlaying ? _stopRadio : _startRadio,
-                  elevation: 0,
-                  child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      p.original,
+                      style: TextStyle(
+                        fontSize: 21, // 원문 크기 상향
+                        height: 1.6,
+                        color: isEnActive ? Colors.brown[900] : Colors.black87.withValues(alpha: isCurrent ? 1.0 : 0.4),
+                        fontWeight: isEnActive ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      _useLiteral ? p.translationLiteral : p.translationLiterary,
+                      style: TextStyle(
+                        fontSize: 17,
+                        height: 1.6,
+                        color: isKoActive ? Colors.brown[700] : Colors.grey[600]!.withValues(alpha: isCurrent ? 1.0 : 0.4),
+                        fontWeight: isKoActive ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              );
+            },
+          );
+        },
+      ),
+      bottomNavigationBar: Container(
+        color: Colors.white,
+        padding: const EdgeInsets.only(bottom: 40, top: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildSpeedSlider("ENGLISH SPEED", _enSpeed, (val) => setState(() => _enSpeed = val)),
+            _buildSpeedSlider("KOREAN SPEED", _koSpeed, (val) => setState(() => _koSpeed = val)),
+            const SizedBox(height: 15),
+            FloatingActionButton.large(
+              onPressed: _isPlaying ? _stopRadio : _startRadio,
+              elevation: 2,
+              backgroundColor: Colors.brown[100],
+              child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.brown[900], size: 40),
             ),
-          )
-        ],
+          ],
+        ),
       ),
     );
   }
